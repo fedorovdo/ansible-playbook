@@ -1,0 +1,198 @@
+---
+- name: Install WordPress with Nginx on Debian 12
+  hosts: web
+  become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Ensure Python is installed
+      apt:
+        name: python3
+        state: present
+
+    - name: Ensure MySQL Python library is installed
+      apt:
+        name: python3-mysqldb
+        state: present
+
+    - name: Install dependencies
+      apt:
+        name:
+          - curl
+          - wget
+          - gnupg2
+          - ca-certificates
+          - lsb-release
+          - apt-transport-https
+        state: present
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Start and enable Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Install PHP and extensions
+      apt:
+        name:
+          - php-fpm
+          - php-mysql
+          - php-xml
+          - php-gd
+          - php-curl
+        state: present
+
+    - name: Download MariaDB setup script
+      get_url:
+        url: https://downloads.mariadb.com/MariaDB/mariadb_repo_setup
+        dest: /tmp/mariadb_repo_setup
+        mode: '0755'
+
+    - name: Run MariaDB setup script
+      command: /tmp/mariadb_repo_setup
+
+    - name: Install MariaDB server
+      apt:
+        name: mariadb-server
+        state: present
+
+    - name: Start and enable MariaDB
+      service:
+        name: mariadb
+        state: started
+        enabled: true
+
+    - name: Set the root password
+      mysql_user:
+        name: root
+        host: "{{ item }}"
+        password: "njGwXNvi"
+        login_user: root
+        login_password: "njGwXNvi"
+        state: present
+      loop:
+        - localhost
+        - 127.0.0.1
+        - ::1
+      ignore_errors: yes  # Allow the playbook to continue if this step fails for troubleshooting
+ 
+    - name: Gather facts
+      setup:
+
+    - name: Create /root/.my.cnf file for passwordless access
+      copy:
+        dest: /root/.my.cnf
+        content: |
+          [client]
+          user=root
+          password="njGwXNvi"
+        owner: root
+        group: root
+        mode: '0600'
+      when: ansible_facts.get('ansible_virtualization_type', '') != "docker"
+
+
+    - name: Remove anonymous users
+      mysql_user:
+        name: ''
+        host_all: yes
+        state: absent
+        login_user: root
+        login_password: "njGwXNvi"
+
+    - name: Disallow root login remotely
+      mysql_user:
+        name: root
+        host: "{{ item }}"
+        password: "njGwXNvi"
+        login_user: root
+        login_password: "njGwXNvi"
+        state: present
+      loop:
+        - 127.0.0.1
+        - ::1
+        - localhost
+
+    - name: Remove test database
+      mysql_db:
+        name: test
+        state: absent
+        login_user: root
+        login_password: "njGwXNvi"
+
+    - name: Reload privilege tables
+      mysql_user:
+        name: root
+        host: localhost
+        check_implicit_admin: yes
+        state: present
+        login_user: root
+        login_password: "njGwXNvi"
+
+    - name: Create WordPress database
+      mysql_db:
+        name: wordpress
+        encoding: utf8mb4
+        collation: utf8mb4_unicode_ci
+        login_user: root
+        login_password: "njGwXNvi"
+
+    - name: Create WordPress database user
+      mysql_user:
+        name: wordpressuser
+        password: njGwXNvi
+        priv: 'wordpress.*:ALL'
+        state: present
+
+    - name: Download WordPress
+      get_url:
+        url: https://wordpress.org/latest.tar.gz
+        dest: /tmp/latest.tar.gz
+
+    - name: Extract WordPress
+      unarchive:
+        src: /tmp/latest.tar.gz
+        dest: /var/www/
+        remote_src: yes
+
+    - name: Configure WordPress
+      template:
+        src: /root/ansible-playbook/roles/wordpress/templates/wp-config.php.j2
+        dest: /var/www/wordpress/wp-config.php
+
+    - name: Set permissions for WordPress
+      file:
+        path: /var/www/wordpress
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Configure Nginx for WordPress
+      template:
+        src: /root/ansible-playbook/roles/nginx/templates/wordpress.conf.j2
+        dest: /etc/nginx/sites-available/wordpress
+
+    - name: Enable WordPress site
+      file:
+        src: /etc/nginx/sites-available/wordpress
+        dest: /etc/nginx/sites-enabled/wordpress
+        state: link
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      notify: restart nginx
+
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted
